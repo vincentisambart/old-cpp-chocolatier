@@ -3,6 +3,7 @@
 #include "json.hpp"
 #pragma clang diagnostic pop
 
+#include "clang/Basic/Version.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/CompilerInstance.h"
@@ -68,8 +69,10 @@ char const *get_builtin_kind_name(clang::BuiltinType::Kind kind) {
     return "Double";
   case clang::BuiltinType::LongDouble:
     return "LongDouble";
+#if CLANG_VERSION_MAJOR >= 6
   case clang::BuiltinType::Float16:
     return "Float16";
+#endif
   case clang::BuiltinType::Float128:
     return "Float128";
   case clang::BuiltinType::ObjCId:
