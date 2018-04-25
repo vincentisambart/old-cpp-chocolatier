@@ -28,7 +28,8 @@ class JSONSerializerBuilder
   end
 
   def self.find_llvm_config
-    # First try to find llvm-config in the PATH
+    return ENV["LLVM_CONFIG"] if ENV["LLVM_CONFIG"] && File.exist?(ENV["LLVM_CONFIG"])
+    # Look if llvm-config is in the PATH
     in_path = `which llvm-config`.strip
     return in_path unless in_path.empty?
     # If Homebrew is not installed, no fallback
