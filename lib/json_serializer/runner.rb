@@ -38,7 +38,7 @@ module JSONSerializer
       sdk_path = AppleSDK.sdk_path(:mac_os)
       output = `#{BINARY_PATH.to_s.shellescape} #{file_path.to_s.shellescape} -- -x objective-c -isysroot #{sdk_path.to_s.shellescape}`
       raise "Error parsing #{file_path}: #{output}" unless $?.success?
-      JSON.parse(output.strip)
+      JSON.parse(output.strip, symbolize_names: true)
     end
   end
 end

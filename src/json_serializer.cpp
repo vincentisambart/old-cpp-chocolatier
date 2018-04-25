@@ -3,9 +3,9 @@
 #include "json.hpp"
 #pragma clang diagnostic pop
 
-#include "clang/Basic/Version.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Basic/Version.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Index/USRGeneration.h"
@@ -21,7 +21,7 @@ auto serialize_type(clang::QualType const &qual_type, clang::ASTContext const *c
     -> nlohmann::json;
 auto serialize_decl(clang::Decl const *decl) -> nlohmann::json;
 
-char const *get_builtin_kind_name(clang::BuiltinType::Kind kind) {
+auto get_builtin_kind_name(clang::BuiltinType::Kind kind) -> char const * {
   switch (kind) {
   case clang::BuiltinType::Void:
     return "Void";
@@ -84,6 +84,41 @@ char const *get_builtin_kind_name(clang::BuiltinType::Kind kind) {
   default:
     std::cerr << "Unknown builtin type: " << kind << "\n";
     return "unknown";
+  }
+}
+
+auto get_method_family_name(clang::ObjCMethodFamily family) -> char const * {
+  switch (family) {
+  case clang::OMF_None:
+    return nullptr;
+  case clang::OMF_alloc:
+    return "alloc";
+  case clang::OMF_copy:
+    return "copy";
+  case clang::OMF_init:
+    return "init";
+  case clang::OMF_mutableCopy:
+    return "mutableCopy";
+  case clang::OMF_new:
+    return "new";
+  case clang::OMF_autorelease:
+    return "autorelease";
+  case clang::OMF_dealloc:
+    return "dealloc";
+  case clang::OMF_finalize:
+    return "finalize";
+  case clang::OMF_release:
+    return "release";
+  case clang::OMF_retain:
+    return "retain";
+  case clang::OMF_retainCount:
+    return "retainCount";
+  case clang::OMF_self:
+    return "self";
+  case clang::OMF_initialize:
+    return "initialize";
+  case clang::OMF_performSelector:
+    return "performSelector";
   }
 }
 
@@ -381,6 +416,11 @@ auto serialize_decl(clang::Decl const *decl) -> nlohmann::json {
     nlohmann::json decl_attrs;
     auto objc_method_decl = static_cast<const clang::ObjCMethodDecl *>(decl);
     serialized_decl["selector"] = objc_method_decl->getSelector().getAsString();
+    serialized_decl["is_instance_method"] = objc_method_decl->isInstanceMethod();
+    auto method_family_name = get_method_family_name(objc_method_decl->getMethodFamily());
+    if (method_family_name != nullptr) {
+      serialized_decl["method_family"] = method_family_name;
+    }
     serialized_decl["is_variadic"] = objc_method_decl->isVariadic();
     {
       auto serialized_params = nlohmann::json::array();

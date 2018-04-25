@@ -1,1 +1,2 @@
 - add license
+- be able to specify SDK name and machine architecture
