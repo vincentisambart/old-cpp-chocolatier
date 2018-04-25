@@ -66,6 +66,7 @@ class JSONSerializerBuilder
   def self.build
     puts "Rebuilding the JSON serializer..."
     llvm_config_path = self.llvm_config_path
+    raise "Could not find llvm-config. To install LLVM+clang with Hoembrew: brew install llvm" unless llvm_config_path
     llvm_version = config_command(llvm_config_path, "--version")
     llvm_prefix = Pathname.new(config_command(llvm_config_path, "--prefix"))
 
