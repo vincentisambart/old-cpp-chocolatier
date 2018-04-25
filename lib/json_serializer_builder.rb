@@ -28,7 +28,10 @@ class JSONSerializerBuilder
   end
 
   def self.find_llvm_config
-    return ENV["LLVM_CONFIG"] if ENV["LLVM_CONFIG"] && File.exist?(ENV["LLVM_CONFIG"])
+    if env_var = ENV["LLVM_CONFIG"]
+      raise "Incorrect llvm-config path specified: #{env_var}" unless File.executable?(env_var)
+      return env_var
+    end
     # Look if llvm-config is in the PATH
     in_path = `which llvm-config`.strip
     return in_path unless in_path.empty?
