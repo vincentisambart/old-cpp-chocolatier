@@ -1,0 +1,18 @@
+#!/usr/bin/env ruby
+
+if Gem::Version.new(RUBY_VERSION) < Gem::Version.new("2.3")
+  raise "Ruby 2.3 required"
+end
+
+require_relative "../lib/json_serializer_builder"
+unless JSONSerializerBuilder.up_to_date?
+  begin
+    JSONSerializerBuilder.build
+  rescue
+    if JSONSerializerBuilder.serializer_available?
+      STDERR.puts "Failed building the JSON serializer, falling back to the already built version."
+    else
+      raise
+    end
+  end
+end
