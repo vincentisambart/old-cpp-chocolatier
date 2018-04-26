@@ -16,10 +16,55 @@ class Converter
     type[:type_class] == "Builtin" && type[:name] == "Void"
   end
 
-  def ptr_to_id?(type)
-    return false unless type[:type_class] == "ObjCObjectPointer" && type[:pointee][:type_class] == "ObjCObject"
-    base_type = type[:pointee][:base_type]
-    base_type && base_type[:type_class] == "Builtin" && base_type[:name] == "ObjCId"
+  def ptr_to_objc_id?(type)
+    match?(type, {
+      type_class: "ObjCObjectPointer",
+      pointee: {
+        type_class: "ObjCObject",
+        base_type: {
+          type_class: "Builtin",
+          name: "ObjCId",
+        },
+      },
+    })
+  end
+
+  def ptr_to_objc_sel?(type)
+    match?(type, {
+      type_class: "Pointer",
+      pointee: {
+        type_class: "Builtin",
+        name: "ObjCSel",
+      },
+    })
+  end
+
+  def ptr_to_objc_class?(type)
+    match?(type, {
+      type_class: "ObjCObjectPointer",
+      pointee: {
+        type_class: "ObjCObject",
+        base_type: {
+          type_class: "Builtin",
+          name: "ObjCClass",
+        },
+      },
+    })
+  end
+
+  def match?(json, pattern)
+    case pattern
+    when Array
+      return false unless json.is_a?(Hash)
+      json.zip(pattern).all? {|j, p| match?(j, p) }
+    when Hash
+      return false unless json.is_a?(Hash)
+      pattern.all? {|k, v| match?(json[k], v) }
+    when String, Number
+      json == pattern
+    else
+      raise "Unknown pattern type #{pattern.class}"
+    end
   end
 
   def rustify_type(type)
@@ -61,15 +106,14 @@ class Converter
       decl = find_decl(type[:decl_usr])
       if type[:name] == "BOOL" && decl[:type][:type_class] == "Builtin" && decl[:type][:name] = "SChar"
         "objc::runtime::BOOL"
-      elsif type[:name] == "instancetype" && ptr_to_id?(decl[:type])
+      elsif type[:name] == "instancetype" && ptr_to_objc_id?(decl[:type])
         "Self"
-      elsif type[:name] == "id" && ptr_to_id?(decl[:type])
+      elsif type[:name] == "id" && ptr_to_objc_id?(decl[:type])
         "id---TODO"
-      elsif type[:name] == "SEL" && decl[:type][:type_class] == "Pointer" && decl[:type][:pointee][:type_class] == "Builtin" && decl[:type][:pointee][:name] = "ObjCSel"
+      elsif type[:name] == "SEL" && ptr_to_objc_sel?(decl[:type])
         "objc::runtime::Sel"
-      elsif type[:name] == "Class" && decl[:type][:type_class] == "ObjCObjectPointer" && decl[:type][:pointee][:type_class] == "ObjCObject" # TODO
+      elsif type[:name] == "Class" && ptr_to_objc_class?(decl[:type])
         "Class---TODO"
-# {:is_implicit=>true, :is_referenced=>false, :kind=>"Typedef", :name=>"Class", :type=>{:pointee=>{:base_type=>{:name=>"ObjCClass", :type_class=>"Builtin"}, :type_class=>"ObjCObject"}, :type_class=>"ObjCObjectPointer"}, :usr=>"c:@T@Class"}
       else
         "todo"
       end
