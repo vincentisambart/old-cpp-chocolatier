@@ -36,7 +36,7 @@ module JSONSerializer
   module Runner
     def self.run_on_objc_file(file_path)
       sdk_path = AppleSDK.sdk_path(:mac_os)
-      output = `#{BINARY_PATH.to_s.shellescape} #{file_path.to_s.shellescape} -- -x objective-c -isysroot #{sdk_path.to_s.shellescape}`
+      output = `#{BINARY_PATH.to_s.shellescape} #{file_path.to_s.shellescape} -- -x objective-c -isysroot #{sdk_path.to_s.shellescape} -fobjc-arc`
       raise "Error parsing #{file_path}: #{output}" unless $?.success?
       JSON.parse(output.strip, symbolize_names: true)
     end
