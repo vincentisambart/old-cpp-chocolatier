@@ -345,12 +345,12 @@ auto serialize_decl(clang::Decl const *decl) -> nlohmann::json {
   {
     auto location = decl->getLocation();
     if (location.isValid()) {
-      auto full_loc = context->getFullLoc(location);
-      auto file_entry = full_loc.getFileEntry();
-      if (file_entry != nullptr) {
+      auto const &source_manager = context->getSourceManager();
+      auto presumed_loc = source_manager.getPresumedLoc(location);
+      if (!presumed_loc.isInvalid()) {
         nlohmann::json serialized_location;
-        serialized_location["file"] = file_entry->getName();
-        serialized_location["line"] = full_loc.getLineNumber();
+        serialized_location["file"] = presumed_loc.getFilename();
+        serialized_location["line"] = presumed_loc.getLine();
         serialized_decl["location"] = serialized_location;
       }
     }
