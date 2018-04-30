@@ -1,3 +1,4 @@
 - add license
 - be able to specify SDK name and machine architecture
 - look if there isn't a way with clang to get the framework a class is in (as Swift might be doing it)
+- remove old method that have been deprecated for a long time
