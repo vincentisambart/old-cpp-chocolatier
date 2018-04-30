@@ -21,5 +21,6 @@ file_path = ARGV[0]
 require_relative "../lib/converter"
 
 json = JSONSerializer::Runner.run_on_objc_file(file_path)
+# require "pp"; pp json
 converter = Converter.new(json)
 converter.convert
