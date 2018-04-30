@@ -1,4 +1,5 @@
 require "pp"
+require "set"
 
 class Converter
   def initialize(json)
@@ -153,6 +154,72 @@ class Converter
     mod.downcase
   end
 
+  def rustify_raw_type(type)
+    case type[:type_class]
+    when "Builtin"
+      case type[:name]
+      when "Void"
+        "libc::c_void"
+      when "Char_U", "Char_S"
+        "libc::c_char"
+      when "UChar"
+        "libc::c_uchar"
+      when "UShort"
+        "libc::c_ushort"
+      when "UInt"
+        "libc::c_uint"
+      when "ULong"
+        "libc::c_ulong"
+      when "ULongLong"
+        "libc::c_ulonglong"
+      when "SChar"
+        "libc::c_schar"
+      when "Short"
+        "libc::c_short"
+      when "Int"
+        "libc::c_int"
+      when "Long"
+        "libc::c_long"
+      when "LongLong"
+        "libc::c_longlong"
+      when "Float"
+        "libc::c_float"
+      when "Double"
+        "libc::c_double"
+      when "Bool"
+        "bool"
+      else
+        raise "Unknown builtin type #{type.inspect}"
+      end
+    when "Typedef"
+      decl = find_decl(type[:decl_usr])
+      if type[:name] == "BOOL" && decl[:type][:type_class] == "Builtin" && decl[:type][:name] = "SChar"
+        "objc::runtime::BOOL"
+      elsif type[:name] == "instancetype" && ptr_to_objc_id?(decl[:type])
+        "ObjCObjectPointer"
+      elsif type[:name] == "id" && ptr_to_objc_id?(decl[:type])
+        "ObjCObjectPointer"
+      elsif type[:name] == "SEL" && ptr_to_objc_sel?(decl[:type])
+        "objc::runtime::Sel"
+      elsif type[:name] == "Class" && ptr_to_objc_class?(decl[:type])
+        "Class"
+      else
+        type[:name]
+      end
+    when "ObjCObjectPointer"
+      "ObjCObjectPointer"
+    when "ObjCTypeParam"
+      "ObjCObjectPointer"
+    when "Attributed"
+      rustify_raw_type(type[:modified_type])
+    when "Pointer", "Decayed"
+      "*#{rustify_raw_type(type[:pointee])}"
+    else
+      p type
+      "todo"
+    end
+  end
+
   def rustify_method(decl)
     raise "Expected #{decl.inspect} to be a method declaration" unless decl[:kind] == "ObjCMethod"
     method_name = decl[:selector].gsub(":", "_")
@@ -163,6 +230,56 @@ class Converter
     else
       "fn #{method_name}(#{params.join(", ")}) -> #{rustify_type(decl[:return_type])}"
     end
+  end
+
+  def rustify_method_raw(trait_name, decl)
+    raise "Expected #{decl.inspect} to be a method declaration" unless decl[:kind] == "ObjCMethod"
+    # im = instance method, cm = class method
+    method_type = if decl[:is_instance_method] then "im" else "cm" end
+    escaped_selector = decl[:selector].gsub(":", "_")
+
+    code = ""
+    code << "        pub unsafe fn #{trait_name}_#{method_type}_#{escaped_selector}("
+    if decl[:is_instance_method]
+      code << "ptr: ObjCObjectPointer"
+    else
+      code << "cls: &objc::runtime::Class"
+    end
+    unless decl[:params].empty?
+      code << ", "
+      code << decl[:params].map do |param|
+        "#{param[:name]}: #{rustify_raw_type(param[:type])}"
+      end.join(", ")
+    end
+    code << ") "
+    unless void_type?(decl[:return_type])
+      code << "-> #{rustify_raw_type(decl[:return_type])} "
+    end
+    code << "{\n"
+    code << "            "
+    if void_type?(decl[:return_type])
+      # void methods must have their return type annotated
+      code << "let _: () = "
+    end
+    if decl[:is_instance_method]
+      code << "(*ptr)"
+    else
+      code << "cls"
+    end
+    code << ".send_message(*selectors::#{escaped_selector}, ("
+    if decl[:params].length == 1
+      code << decl[:params][0][:name]
+      code << "," # tuples with one element must have a "," before the closing brace
+    else
+      code << decl[:params].map {|param| param[:name] }.join(", ")
+    end
+    code << ")).unwrap()"
+    if void_type?(decl[:return_type])
+      code << ";"
+    end
+    code << "\n"
+    code << "        }\n"
+    code
   end
 
   def convert
@@ -194,6 +311,7 @@ class Converter
     end
 
     @objc_declarations_per_module = {}
+    @selectors_per_module = {}
     @json[:children].each do |decl|
       next if decl[:is_forward_declaration]
       next unless %w{ObjCInterface ObjCProtocol ObjCCategory}.include?(decl[:kind])
@@ -201,6 +319,9 @@ class Converter
       methods = decl[:children].select {|child| child[:kind] == "ObjCMethod" }
 
       @objc_declarations_per_module[mod] ||= {}
+      @selectors_per_module[mod] ||= Set.new
+      @selectors_per_module[mod].merge methods.map {|method| method[:selector] }
+
       case decl[:kind]
       when "ObjCInterface"
         @objc_declarations_per_module[mod][:interface] ||= {}
@@ -237,6 +358,90 @@ class Converter
     @objc_declarations_per_module.each do |mod, decls|
       puts "mod #{mod} {"
 
+      puts <<-END
+    #[allow(non_upper_case_globals)]
+    mod selectors {
+        use objc::runtime::Sel;
+
+        lazy_static! {
+      END
+      @selectors_per_module[mod].to_a.sort.each do |selector|
+        puts %{            pub static ref #{selector.gsub(":", "_")}: Sel = Sel::register("#{selector}");}
+      end
+      puts <<-END
+        }
+    }
+      END
+
+      if decls[:interface]
+        puts <<-END
+    #[allow(non_upper_case_globals)]
+    mod classes {
+        use objc::runtime::Class;
+
+        lazy_static! {
+    END
+        decls[:interface].each do |name, interface|
+          puts %{            pub static ref #{name}: &'static Class = Class::get("#{name}").unwrap();}
+        end
+        puts <<-END
+        }
+    }
+          END
+      end
+
+      if mod == "core"
+        puts <<-END
+    pub type ObjCObjectPointer = *mut objc::runtime::Object;
+    pub trait ObjCObject {
+        fn ptr(&self) -> ObjCObjectPointer;
+        fn from_ptr(ptr: ObjCObjectPointer) -> Self;
+    }
+        END
+      end
+
+      puts <<-END
+    #[allow(non_snake_case)]
+    mod raw {
+        use objc;
+        use objc::Message;
+        use super::{selectors, ObjCObjectPointer};
+
+      END
+
+      (decls[:protocol] || {}).each do |name, protocol|
+        protocol[:methods].each do |method|
+          print rustify_method_raw("#{name}Protocol", method)
+        end
+      end
+
+      (decls[:interface] || {}).each do |name, interface|
+        interface[:methods].each do |method|
+          print rustify_method_raw("#{name}Interface", method)
+        end
+      end
+
+      (decls[:category] || {}).each do |class_name, protocol|
+        protocol[:methods].each do |method|
+          print rustify_method_raw("#{class_name}Category", method)
+        end
+      end
+
+      puts "    }" # mod raw
+
+      (decls[:protocol] || {}).each do |name, protocol|
+        if protocol[:protocols]
+          base_traits = protocol[:protocols].map {|protocol_name| "#{protocol_name}Protocol" }
+          puts "    trait #{name}Protocol: #{base_traits.join(", ")} {"
+        else
+          puts "    trait #{name}Protocol {"
+        end
+        protocol[:methods].each do |method_decl|
+          puts "        #{rustify_method(method_decl)}"
+        end
+        puts "    }"
+      end
+
       (decls[:interface] || {}).each do |name, interface|
         base_traits = []
         if interface[:super_class]
@@ -246,7 +451,7 @@ class Converter
           base_traits.concat interface[:protocols].map {|protocol_name| "#{protocol_name}Protocol" }
         end
 
-        puts "    pub struct #{name}(ObjCPointer);"
+        puts "    pub struct #{name}(ObjCObjectPointer);"
 
         if base_traits.empty?
           puts "    pub trait #{name}Interface {"
@@ -260,28 +465,15 @@ class Converter
 
         puts <<-END
     impl ObjCObject for #{name} {
-        fn ptr(&self) -> ObjCPointer {
+        fn ptr(&self) -> ObjCObjectPointer {
             self.0
         }
-        fn from_ptr_unchecked(ptr: ObjCPointer) -> NSObject {
+        fn from_ptr_unchecked(ptr: ObjCObjectPointer) -> NSObject {
             #{name}(ptr)
         }
     }
         END
         puts "    impl #{name}Interface for #{name} {}"
-      end
-
-      (decls[:protocol] || {}).each do |name, protocol|
-        if protocol[:protocols]
-          base_traits = protocol[:protocols].map {|protocol_name| "#{protocol_name}Protocol" }
-          puts "    trait #{name}Protocol: #{base_traits.join(", ")} {"
-        else
-          puts "    trait #{name}Protocol {"
-        end
-        protocol[:methods].each do |method_decl|
-          puts "        #{rustify_method(method_decl)}"
-        end
-        puts "    }"
       end
 
       (decls[:category] || {}).each do |class_name, category|
