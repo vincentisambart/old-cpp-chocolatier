@@ -476,6 +476,11 @@ auto serialize_decl(clang::Decl const *decl) -> nlohmann::json {
   case clang::Decl::Enum: {
     auto enum_decl = static_cast<const clang::EnumDecl *>(decl);
     serialized_decl["name"] = enum_decl->getName();
+    serialized_decl["is_closed"] = enum_decl->isClosed();
+    auto integer_type = enum_decl->getIntegerType();
+    if (!integer_type.isNull()) {
+      serialized_decl["integer_type"] = serialize_type(integer_type, context);
+    }
     {
       auto enumerators = nlohmann::json::array();
       for (auto const enumerator_decl : enum_decl->enumerators()) {
