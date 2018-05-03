@@ -364,6 +364,7 @@ class Converter
         add_c_defs_used_by_type(decl[:type])
       when "Enum"
         @enums << decl[:usr]
+        add_c_defs_used_by_type(decl[:integer_type])
       when "ObjCInterface"
         @types << decl[:usr]
       else
