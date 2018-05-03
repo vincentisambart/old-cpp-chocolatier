@@ -308,88 +308,97 @@ class Converter
     type_handled?(decl[:return_type]) && decl[:params].all? {|param| type_handled?(param[:type]) }
   end
 
-  class CDef
-    NAME_KINDS = %i{types structs enums}
-    NAME_KINDS.each do |name_kind|
-      define_method(name_kind) do
-        @names[name_kind] ||= Set.new
-      end
-    end
+  class CDefinitionsSet
+    attr_reader :types, :structs, :enums
 
-    def initialize
-      @names = {}
+    def initialize(converter)
+      @converter = converter
+      @types = Set.new
+      @structs = Set.new
+      @enums = Set.new
     end
 
     def to_h
-      @names.dup
+      h = {}
+      h[:types] = @types unless @types.empty?
+      h[:structs] = @structs unless @structs.empty?
+      h[:enums] = @enums unless @enums.empty?
+      h
     end
-  end
 
-  # TODO: Should maybe a method of CDef
-  def add_custom_c_types_used_for_decl(cdef, decl)
-    case decl[:kind]
-    when "Typedef"
-      add_custom_c_types_used_for_type(cdef, decl[:type])
-    when "ObjCMethod"
-      add_custom_c_types_used_for_type(cdef, decl[:return_type])
-      decl[:params].each do |param|
-        add_custom_c_types_used_for_type(cdef, param[:type])
-      end
-    when "Record"
-      case decl[:tag_kind]
-      when "struct"
-        return if cdef.structs.include?(decl[:usr]) # To prevent infinite loops
-        cdef.structs << decl[:usr]
-        decl[:fields].each do |field|
-          add_custom_c_types_used_for_type(cdef, field[:type])
+    def add_c_defs_used_by_decl(decl)
+      case decl[:kind]
+      when "ObjCInterface", "ObjCProtocol", "ObjCCategory"
+        return if @types.include?(decl[:usr])
+        @types << decl[:usr]
+        if decl[:children]
+          decl[:children].each do |child|
+            add_c_defs_used_by_decl(child) if child[:kind] == "ObjCMethod"
+          end
         end
+      when "Typedef"
+        add_c_defs_used_by_type(decl[:type])
+      when "ObjCMethod"
+        add_c_defs_used_by_type(decl[:return_type])
+        decl[:params].each do |param|
+          add_c_defs_used_by_type(param[:type])
+        end
+      when "Record"
+        case decl[:tag_kind]
+        when "struct"
+          return if @structs.include?(decl[:usr])
+          @structs << decl[:usr]
+          decl[:fields].each do |field|
+            add_c_defs_used_by_type(field[:type])
+          end
+        else
+          raise "Unknown decl #{decl.inspect}"
+        end
+      when "Field"
+        add_c_defs_used_by_type(decl[:type])
+      when "Enum"
+        @enums << decl[:usr]
+      when "ObjCInterface"
+        @types << decl[:usr]
       else
         raise "Unknown decl #{decl.inspect}"
       end
-    when "Field"
-      add_custom_c_types_used_for_type(cdef, decl[:type])
-    when "Enum"
-      cdef.enums << decl[:usr]
-    when "ObjCInterface"
-      cdef.types << decl[:usr]
-    else
-      raise "Unknown decl #{decl.inspect}"
     end
-  end
 
-  def add_custom_c_types_used_for_type(cdef, type)
-    case type[:type_class]
-    when "Builtin", "ObjCTypeParam"
-      nil
-    when "Typedef", "Record", "Enum"
-      decl = find_decl(type[:decl_usr])
-      add_custom_c_types_used_for_decl(cdef, decl)
-    when "Attributed"
-      add_custom_c_types_used_for_type(cdef, type[:modified_type])
-    when "Pointer", "Decayed", "ObjCObjectPointer", "BlockPointer"
-      add_custom_c_types_used_for_type(cdef, type[:pointee])
-    when "ObjCInterface", "ObjCObject"
-      if type[:base_type]
-        add_custom_c_types_used_for_type(cdef, type[:base_type])
+    def add_c_defs_used_by_type(type)
+      case type[:type_class]
+      when "Builtin", "ObjCTypeParam"
+        nil
+      when "Typedef", "Record", "Enum"
+        decl = @converter.find_decl(type[:decl_usr])
+        add_c_defs_used_by_decl(decl)
+      when "Attributed"
+        add_c_defs_used_by_type(type[:modified_type])
+      when "Pointer", "Decayed", "ObjCObjectPointer", "BlockPointer"
+        add_c_defs_used_by_type(type[:pointee])
+      when "ObjCInterface", "ObjCObject"
+        if type[:base_type]
+          add_c_defs_used_by_type(type[:base_type])
+        else
+          decl = @converter.find_decl(type[:interface_usr])
+          add_c_defs_used_by_decl(decl)
+        end
+      when "ElaboratedType"
+        add_c_defs_used_by_type(type[:named_type])
+      when "FunctionProto"
+        type[:params].each do |param|
+          add_c_defs_used_by_type(param[:type])
+        end
+        add_c_defs_used_by_type(type[:return_type])
+      when "FunctionNoProto"
+        add_c_defs_used_by_type(type[:return_type])
+      when "Paren"
+        add_c_defs_used_by_type(type[:inner_type])
+      when "ConstantArray"
+        add_c_defs_used_by_type(type[:element_type])
       else
-        decl = find_decl(type[:interface_usr])
-        add_custom_c_types_used_for_decl(cdef, decl)
+        raise "Unknown type #{type.inspect}"
       end
-    when "ElaboratedType"
-      add_custom_c_types_used_for_type(cdef, type[:named_type])
-    when "FunctionProto"
-      type[:params].each do |param|
-        add_custom_c_types_used_for_type(cdef, param[:type])
-      end
-      add_custom_c_types_used_for_type(cdef, type[:return_type])
-    when "FunctionNoProto"
-      add_custom_c_types_used_for_type(cdef, type[:return_type])
-    when "Paren"
-      add_custom_c_types_used_for_type(cdef, type[:inner_type])
-    when "ConstantArray"
-      add_custom_c_types_used_for_type(cdef, type[:element_type])
-    else
-      raise "Unknown type #{type.inspect}"
     end
   end
 
@@ -421,20 +430,18 @@ class Converter
       end
     end
 
-    cdef = CDef.new
+    cdef = CDefinitionsSet.new(self)
 
     @objc_declarations_per_module = {}
     @selectors_per_module = {}
     @json[:children].each do |decl|
       next if decl[:is_forward_declaration]
       next unless %w{ObjCInterface ObjCProtocol ObjCCategory}.include?(decl[:kind])
-      mod = determine_module(decl)
-      all_methods = decl[:children].select {|child| child[:kind] == "ObjCMethod" }
-      methods = all_methods.select {|child| method_handled?(child) }
 
-      all_methods.each do |method|
-        add_custom_c_types_used_for_decl(cdef, method)
-      end
+      cdef.add_c_defs_used_by_decl(decl)
+
+      mod = determine_module(decl)
+      methods = decl[:children].select {|child| child[:kind] == "ObjCMethod" && method_handled?(child) }
 
       @objc_declarations_per_module[mod] ||= {}
       @selectors_per_module[mod] ||= Set.new
