@@ -477,6 +477,7 @@ auto serialize_decl(clang::Decl const *decl) -> nlohmann::json {
     auto enum_decl = static_cast<const clang::EnumDecl *>(decl);
     serialized_decl["name"] = enum_decl->getName();
     serialized_decl["is_closed"] = enum_decl->isClosed();
+    serialized_decl["is_flag"] = enum_decl->hasAttr<clang::FlagEnumAttr>();
     auto integer_type = enum_decl->getIntegerType();
     if (!integer_type.isNull()) {
       serialized_decl["integer_type"] = serialize_type(integer_type, context);
