@@ -152,7 +152,7 @@ class Converter
         $1
       end
     else
-      raise "Couldn't find the module for #{file_path}"
+      raise "Couldn't determine the module for #{file_path}"
     end
     mod.downcase
   end
@@ -308,6 +308,91 @@ class Converter
     type_handled?(decl[:return_type]) && decl[:params].all? {|param| type_handled?(param[:type]) }
   end
 
+  class CDef
+    NAME_KINDS = %i{types structs enums}
+    NAME_KINDS.each do |name_kind|
+      define_method(name_kind) do
+        @names[name_kind] ||= Set.new
+      end
+    end
+
+    def initialize
+      @names = {}
+    end
+
+    def to_h
+      @names.dup
+    end
+  end
+
+  # TODO: Should maybe a method of CDef
+  def add_custom_c_types_used_for_decl(cdef, decl)
+    case decl[:kind]
+    when "Typedef"
+      add_custom_c_types_used_for_type(cdef, decl[:type])
+    when "ObjCMethod"
+      add_custom_c_types_used_for_type(cdef, decl[:return_type])
+      decl[:params].each do |param|
+        add_custom_c_types_used_for_type(cdef, param[:type])
+      end
+    when "Record"
+      case decl[:tag_kind]
+      when "struct"
+        return if cdef.structs.include?(decl[:usr]) # To prevent infinite loops
+        cdef.structs << decl[:usr]
+        decl[:fields].each do |field|
+          add_custom_c_types_used_for_type(cdef, field[:type])
+        end
+      else
+        raise "Unknown decl #{decl.inspect}"
+      end
+    when "Field"
+      add_custom_c_types_used_for_type(cdef, decl[:type])
+    when "Enum"
+      cdef.enums << decl[:usr]
+    when "ObjCInterface"
+      cdef.types << decl[:usr]
+    else
+      raise "Unknown decl #{decl.inspect}"
+    end
+  end
+
+  def add_custom_c_types_used_for_type(cdef, type)
+    case type[:type_class]
+    when "Builtin", "ObjCTypeParam"
+      nil
+    when "Typedef", "Record", "Enum"
+      decl = find_decl(type[:decl_usr])
+      add_custom_c_types_used_for_decl(cdef, decl)
+    when "Attributed"
+      add_custom_c_types_used_for_type(cdef, type[:modified_type])
+    when "Pointer", "Decayed", "ObjCObjectPointer", "BlockPointer"
+      add_custom_c_types_used_for_type(cdef, type[:pointee])
+    when "ObjCInterface", "ObjCObject"
+      if type[:base_type]
+        add_custom_c_types_used_for_type(cdef, type[:base_type])
+      else
+        decl = find_decl(type[:interface_usr])
+        add_custom_c_types_used_for_decl(cdef, decl)
+      end
+    when "ElaboratedType"
+      add_custom_c_types_used_for_type(cdef, type[:named_type])
+    when "FunctionProto"
+      type[:params].each do |param|
+        add_custom_c_types_used_for_type(cdef, param[:type])
+      end
+      add_custom_c_types_used_for_type(cdef, type[:return_type])
+    when "FunctionNoProto"
+      add_custom_c_types_used_for_type(cdef, type[:return_type])
+    when "Paren"
+      add_custom_c_types_used_for_type(cdef, type[:inner_type])
+    when "ConstantArray"
+      add_custom_c_types_used_for_type(cdef, type[:element_type])
+    else
+      raise "Unknown type #{type.inspect}"
+    end
+  end
+
   def convert
     raise "Expecting a TranslationUnit declaration" unless @json[:kind] == "TranslationUnit"
     puts "extern crate objc;"
@@ -336,13 +421,20 @@ class Converter
       end
     end
 
+    cdef = CDef.new
+
     @objc_declarations_per_module = {}
     @selectors_per_module = {}
     @json[:children].each do |decl|
       next if decl[:is_forward_declaration]
       next unless %w{ObjCInterface ObjCProtocol ObjCCategory}.include?(decl[:kind])
       mod = determine_module(decl)
-      methods = decl[:children].select {|child| child[:kind] == "ObjCMethod" && method_handled?(child) }
+      all_methods = decl[:children].select {|child| child[:kind] == "ObjCMethod" }
+      methods = all_methods.select {|child| method_handled?(child) }
+
+      all_methods.each do |method|
+        add_custom_c_types_used_for_decl(cdef, method)
+      end
 
       @objc_declarations_per_module[mod] ||= {}
       @selectors_per_module[mod] ||= Set.new
@@ -380,6 +472,8 @@ class Converter
         target[:protocols].concat(decl[:protocols])
       end
     end
+
+    pp cdef.to_h
 
     @objc_declarations_per_module.each do |mod, decls|
       puts "mod #{mod} {"
