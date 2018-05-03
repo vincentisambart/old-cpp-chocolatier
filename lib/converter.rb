@@ -413,6 +413,9 @@ class Converter
         add_c_defs_used_by_type(type[:inner_type])
       when "ConstantArray"
         add_c_defs_used_by_type(type[:element_type])
+      when "ExtVector"
+        # vector types are use by for example AVCameraCalibrationData (matrix_float)
+        # For the time being not supported
       else
         raise "Unknown type #{type.inspect}"
       end
