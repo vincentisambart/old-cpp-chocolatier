@@ -604,7 +604,7 @@ class Converter
           puts "    }"
 
           base_traits = followed_protocols.map {|name| "#{name}Protocol" }
-          base_traits << "ObjCObject" if raw_base_traits.empty?
+          base_traits << "ObjCObject" if base_traits.empty?
           puts "    trait #{decl[:name]}Protocol: #{base_traits.join(", ")} {"
           methods.each do |method_decl|
             puts "        #{rustify_method(method_decl)}"
