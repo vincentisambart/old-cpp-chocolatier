@@ -590,10 +590,10 @@ auto serialize_translation_unit_decl(clang::TranslationUnitDecl const *tu_decl) 
   serialized_tu["kind"] = "TranslationUnit";
   auto children = serialize_decl_children(tu_decl);
   // For some reason the implicit declarations at the start of TU contain id, SEL, Class, but not
-  // instancetype so we have to add it by hand.
-  auto serialized_instance_type_decl =
-      serialize_decl(tu_decl->getASTContext().getObjCInstanceTypeDecl());
-  children.insert(children.begin(), serialized_instance_type_decl);
+  // some others so add them by hand.
+  children.insert(children.begin(),
+                  serialize_decl(tu_decl->getASTContext().getObjCInstanceTypeDecl()));
+  children.insert(children.begin(), serialize_decl(tu_decl->getASTContext().getVaListTagDecl()));
   serialized_tu["children"] = children;
   return serialized_tu;
 }
