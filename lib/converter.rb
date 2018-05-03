@@ -326,6 +326,12 @@ class Converter
       h
     end
 
+    def include?(usr)
+      @types.include?(usr) ||
+        @structs.include?(usr) ||
+        @enums.include?(usr)
+    end
+
     def add_c_defs_used_by_decl(decl)
       case decl[:kind]
       when "ObjCInterface", "ObjCProtocol", "ObjCCategory"
@@ -382,8 +388,12 @@ class Converter
         else
           decl = @converter.find_decl(type[:interface_usr])
           add_c_defs_used_by_decl(decl)
+          if decl[:super_class_usr]
+            super_class_decl = @converter.find_decl(decl[:super_class_usr])
+            add_c_defs_used_by_decl(super_class_decl)
+          end
         end
-      when "ElaboratedType"
+    when "ElaboratedType"
         add_c_defs_used_by_type(type[:named_type])
       when "FunctionProto"
         type[:params].each do |param|
@@ -430,92 +440,41 @@ class Converter
       end
     end
 
-    cdef = CDefinitionsSet.new(self)
-
-    @objc_declarations_per_module = {}
-    @selectors_per_module = {}
+    # Make a list of the definitions used by Objective-C objects
+    definitions_used = CDefinitionsSet.new(self)
     @json[:children].each do |decl|
       next if decl[:is_forward_declaration]
       next unless %w{ObjCInterface ObjCProtocol ObjCCategory}.include?(decl[:kind])
+      definitions_used.add_c_defs_used_by_decl(decl)
+    end
 
-      cdef.add_c_defs_used_by_decl(decl)
+    @declarations_per_module = {}
+    @selectors_per_module = {}
+    @categories_per_module = {}
+    @json[:children].each do |decl|
+      next if decl[:is_forward_declaration]
+      next unless %w{ObjCInterface ObjCProtocol ObjCCategory}.include?(decl[:kind]) || definitions_used.include?(decl[:usr])
 
       mod = determine_module(decl)
-      methods = decl[:children].select {|child| child[:kind] == "ObjCMethod" && method_handled?(child) }
 
-      @objc_declarations_per_module[mod] ||= {}
-      @selectors_per_module[mod] ||= Set.new
-      @selectors_per_module[mod].merge methods.map {|method| method[:selector] }
+      @declarations_per_module[mod] ||= []
+      @declarations_per_module[mod] << decl
+      if %w{ObjCInterface ObjCProtocol ObjCCategory}.include?(decl[:kind])
+        methods = decl[:children].select {|child| child[:kind] == "ObjCMethod" && method_handled?(child) }
 
-      case decl[:kind]
-      when "ObjCInterface"
-        @objc_declarations_per_module[mod][:interface] ||= {}
-        @objc_declarations_per_module[mod][:interface][decl[:name]] ||= {}
-        target = @objc_declarations_per_module[mod][:interface][decl[:name]]
-        if decl[:super_class_usr]
-          super_class_decl = find_decl(decl[:super_class_usr])
-          target[:super_class] = super_class_decl[:name]
+        @selectors_per_module[mod] ||= Set.new
+        @selectors_per_module[mod].merge methods.map {|method| method[:selector] }
+
+        if decl[:kind] == "ObjCCategory"
+          @categories_per_module[mod] ||= {}
+          @categories_per_module[mod][decl[:class_name]] ||= []
+          @categories_per_module[mod][decl[:class_name]] << decl
         end
-      when "ObjCProtocol"
-        @objc_declarations_per_module[mod][:protocol] ||= {}
-        @objc_declarations_per_module[mod][:protocol][decl[:name]] ||= {}
-        target = @objc_declarations_per_module[mod][:protocol][decl[:name]]
-      when "ObjCCategory"
-        # If the category will end up in the same module, directly add methods to the class interface
-        if mod == @class_module[decl[:class_name]]
-          @objc_declarations_per_module[mod][:interface] ||= {}
-          @objc_declarations_per_module[mod][:interface][decl[:class_name]] ||= {}
-          target = @objc_declarations_per_module[mod][:interface][decl[:class_name]]
-        else
-          @objc_declarations_per_module[mod][:category] ||= {}
-          @objc_declarations_per_module[mod][:category][decl[:class_name]] ||= {}
-          target = @objc_declarations_per_module[mod][:category][decl[:class_name]]
-        end
-      end
-      target[:methods] ||= []
-      target[:methods].concat(methods)
-      if decl[:protocols]
-        target[:protocols] ||= []
-        target[:protocols].concat(decl[:protocols])
       end
     end
 
-    pp cdef.to_h
-
-    @objc_declarations_per_module.each do |mod, decls|
+    @declarations_per_module.each do |mod, decls|
       puts "mod #{mod} {"
-
-      puts <<-END
-    #[allow(non_upper_case_globals)]
-    mod selectors {
-        use objc::runtime::Sel;
-
-        lazy_static! {
-      END
-      @selectors_per_module[mod].to_a.sort.each do |selector|
-        puts %{            pub static ref #{selector.gsub(":", "_")}: Sel = Sel::register("#{selector}");}
-      end
-      puts <<-END
-        }
-    }
-      END
-
-      if decls[:interface]
-        puts <<-END
-    #[allow(non_upper_case_globals)]
-    mod classes {
-        use objc::runtime::Class;
-
-        lazy_static! {
-    END
-        decls[:interface].each do |name, interface|
-          puts %{            pub static ref #{name}: &'static Class = Class::get("#{name}").unwrap();}
-        end
-        puts <<-END
-        }
-    }
-          END
-      end
 
       if mod == "core"
         puts <<-END
@@ -527,55 +486,91 @@ class Converter
         END
       end
 
-      (decls[:protocol] || {}).each do |name, protocol|
-        raw_base_traits = (protocol[:protocols] || []).map {|protocol_name| "Raw#{protocol_name}Protocol" }
-        raw_base_traits << "ObjCObject" if raw_base_traits.empty?
-        puts "    trait Raw#{name}Protocol: #{raw_base_traits.join(", ")} {"
-        protocol[:methods].each do |method_decl|
-          puts rustify_raw_method(method_decl)
-        end
-        puts "    }"
+      selectors = @selectors_per_module[mod]
+      if selectors && !selectors.empty?
+        puts <<-END
+    #[allow(non_upper_case_globals)]
+    mod selectors {
+        use objc::runtime::Sel;
 
-        base_traits = (protocol[:protocols] || []).map {|protocol_name| "#{protocol_name}Protocol" }
-        base_traits << "ObjCObject" if raw_base_traits.empty?
-        puts "    trait #{name}Protocol: #{base_traits.join(", ")} {"
-        protocol[:methods].each do |method_decl|
-          puts "        #{rustify_method(method_decl)}"
+        lazy_static! {
+        END
+        selectors.to_a.sort.each do |selector|
+          puts %{            pub static ref #{selector.gsub(":", "_")}: Sel = Sel::register("#{selector}");}
         end
-        puts "    }"
+        puts <<-END
+        }
+    }
+        END
       end
 
-      (decls[:interface] || {}).each do |name, interface|
-        raw_base_traits = []
-        base_traits = []
-        if interface[:super_class]
-          raw_base_traits << "Raw#{interface[:super_class]}Interface"
-          base_traits << "#{interface[:super_class]}Interface"
-        end
-        if interface[:protocols]
-          raw_base_traits.concat interface[:protocols].map {|protocol_name| "Raw#{protocol_name}Protocol" }
-          base_traits.concat interface[:protocols].map {|protocol_name| "#{protocol_name}Protocol" }
-        end
-        if base_traits.empty?
-          base_traits << "ObjCObject"
-          raw_base_traits << "ObjCObject"
-        end
+      class_names = decls
+        .select {|decl| decl[:kind] == "ObjCInterface" }
+        .map {|decl| decl[:name] }
 
-        puts "    pub struct #{name}(ObjCObjectPointer);"
-
-        puts "    pub trait Raw#{name}Interface: #{raw_base_traits.join(", ")} {"
-        interface[:methods].each do |method_decl|
-          puts rustify_raw_method(method_decl)
-        end
-        puts "    }"
-
-        puts "    pub trait #{name}Interface: #{base_traits.join(", ")} {"
-        interface[:methods].each do |method_decl|
-          puts "        #{rustify_method(method_decl)}"
-        end
-        puts "    }"
-
+      unless class_names.empty?
         puts <<-END
+    #[allow(non_upper_case_globals)]
+    mod classes {
+        use objc::runtime::Class;
+
+        lazy_static! {
+          END
+        class_names.each do |name|
+          puts %{            pub static ref #{name}: &'static Class = Class::get("#{name}").unwrap();}
+        end
+        puts <<-END
+        }
+    }
+          END
+      end
+
+      decls.each do |decl|
+        case decl[:kind]
+        when "ObjCInterface"
+          name = decl[:name]
+          categories_on_class = @categories_per_module.dig(mod, name) || []
+          followed_protocols = []
+          followed_protocols.concat(decl[:protocols]) if decl[:protocols]
+          followed_protocols.concat(categories_on_class.map do |category|
+            category[:protocol] || []
+          end.flatten)
+          methods = []
+          methods.concat(decl[:children].select {|child| child[:kind] == "ObjCMethod" })
+          methods.concat(categories_on_class.map do |category|
+            category[:children].select {|child| child[:kind] == "ObjCMethod" }
+          end.flatten)
+
+          raw_base_traits = []
+          base_traits = []
+
+          if decl[:super_class_usr]
+            super_class_decl = find_decl(decl[:super_class_usr])
+            raw_base_traits << "Raw#{super_class_decl[:name]}Interface"
+            base_traits << "#{super_class_decl[:name]}Interface"
+          end
+          raw_base_traits.concat(followed_protocols.map {|protocol_name| "Raw#{protocol_name}Protocol" })
+          base_traits.concat(followed_protocols.map {|protocol_name| "#{protocol_name}Protocol" })
+          if base_traits.empty?
+            base_traits << "ObjCObject"
+            raw_base_traits << "ObjCObject"
+          end
+
+          puts "    pub struct #{name}(ObjCObjectPointer);"
+
+          puts "    pub trait Raw#{name}Interface: #{raw_base_traits.join(", ")} {"
+          methods.each do |method_decl|
+            puts rustify_raw_method(method_decl)
+          end
+          puts "    }"
+
+          puts "    pub trait #{name}Interface: #{base_traits.join(", ")} {"
+          methods.each do |method_decl|
+            puts "        #{rustify_method(method_decl)}"
+          end
+          puts "    }"
+
+          puts <<-END
     impl ObjCObject for #{name} {
         fn ptr(&self) -> ObjCObjectPointer {
             self.0
@@ -584,27 +579,67 @@ class Converter
             #{name}(ptr)
         }
     }
-        END
-        puts "    impl #{name}Interface for #{name} {}"
-      end
+          END
+          puts "    impl #{name}Interface for #{name} {}"
 
-      (decls[:category] || {}).each do |class_name, category|
-        raw_base_traits = ["#{@class_module[class_name]}::Raw#{class_name}Interface"]
-        raw_base_traits.concat (category[:protocols] || []).map {|protocol_name| "Raw#{protocol_name}Protocol" }
-        puts "    trait Raw#{class_name}Category: #{raw_base_traits.join(", ")} {"
-        category[:methods].each do |method_decl|
-          puts rustify_raw_method(method_decl)
-        end
-        puts "    }"
+        when "ObjCProtocol"
+          methods = decl[:children].select {|child| child[:kind] == "ObjCMethod" }
+          followed_protocols = decl[:protocols] || []
+          raw_base_traits = followed_protocols.map {|name| "Raw#{name}Protocol" }
+          raw_base_traits << "ObjCObject" if raw_base_traits.empty?
+          puts "    trait Raw#{decl[:name]}Protocol: #{raw_base_traits.join(", ")} {"
+          methods.each do |method_decl|
+            puts rustify_raw_method(method_decl)
+          end
+          puts "    }"
 
-        base_traits = ["#{@class_module[class_name]}::#{class_name}Interface"]
-        base_traits.concat (category[:protocols] || []).map {|protocol_name| "#{protocol_name}Protocol" }
-        puts "    trait #{class_name}Category: #{base_traits.join(", ")} {"
-        category[:methods].each do |method_decl|
-          puts "        #{rustify_method(method_decl)}"
+          base_traits = followed_protocols.map {|name| "#{name}Protocol" }
+          base_traits << "ObjCObject" if raw_base_traits.empty?
+          puts "    trait #{decl[:name]}Protocol: #{base_traits.join(", ")} {"
+          methods.each do |method_decl|
+            puts "        #{rustify_method(method_decl)}"
+          end
+          puts "    }"
+
+        when "ObjCCategory"
+          # If the class is defined in the module, the methods will be directly added to the class so nothing to do here
+          class_name = decl[:class_name]
+          class_mod = @class_module[class_name]
+          next if mod == class_mod
+
+          categories_on_same_class = @categories_per_module[mod][class_name]
+          # We regroup all categories on the same class at the place the last category was defined in the module
+          next unless categories_on_same_class.last[:usr] == decl[:usr]
+
+          methods = categories_on_same_class.map do |category_decl|
+            category_decl[:children].select {|child| child[:kind] == "ObjCMethod" }
+          end.flatten
+          followed_protocols = categories_on_same_class.map do |category_decl|
+            category_decl[:protocols] || []
+          end.flatten.uniq
+
+          decl[:children].select {|child| child[:kind] == "ObjCMethod" }
+
+          raw_base_traits = ["#{class_mod}::Raw#{class_name}Interface"]
+          raw_base_traits.concat(followed_protocols.map {|protocol_name| "Raw#{protocol_name}Protocol" })
+          puts "    trait Raw#{class_name}Category: #{raw_base_traits.join(", ")} {"
+          methods.each do |method_decl|
+            puts rustify_raw_method(method_decl)
+          end
+          puts "    }"
+
+          base_traits = ["#{class_mod}::#{class_name}Interface"]
+          base_traits.concat(followed_protocols.map {|protocol_name| "#{protocol_name}Protocol" })
+          puts "    trait #{class_name}Category: #{base_traits.join(", ")} {"
+          methods.each do |method_decl|
+            puts "        #{rustify_method(method_decl)}"
+          end
+          puts "    }"
+          puts "    impl #{class_name}Category for #{class_mod}::#{class_name} {}"
+
+        else
+          # TODO
         end
-        puts "    }"
-        puts "    impl #{class_name}Category for #{@class_module[class_name]}::#{class_name} {}"
       end
 
       puts "}"
