@@ -316,6 +316,7 @@ class Converter
       @types = Set.new
       @structs = Set.new
       @enums = Set.new
+      @unions = Set.new
     end
 
     def to_h
@@ -323,13 +324,15 @@ class Converter
       h[:types] = @types unless @types.empty?
       h[:structs] = @structs unless @structs.empty?
       h[:enums] = @enums unless @enums.empty?
+      h[:unions] = @unions unless @unions.empty?
       h
     end
 
     def include?(usr)
       @types.include?(usr) ||
         @structs.include?(usr) ||
-        @enums.include?(usr)
+        @enums.include?(usr) ||
+        @unions.include?(usr)
     end
 
     def add_c_defs_used_by_decl(decl)
@@ -354,11 +357,14 @@ class Converter
         when "struct"
           return if @structs.include?(decl[:usr])
           @structs << decl[:usr]
-          decl[:fields].each do |field|
-            add_c_defs_used_by_type(field[:type])
-          end
+        when "union"
+          return if @unions.include?(decl[:usr])
+          @unions << decl[:usr]
         else
-          raise "Unknown decl #{decl.inspect}"
+          raise "Unknown tag kind #{decl[:tag_kind]} in decl #{decl.inspect}"
+        end
+        decl[:fields].each do |field|
+          add_c_defs_used_by_type(field[:type])
         end
       when "Field"
         add_c_defs_used_by_type(decl[:type])
