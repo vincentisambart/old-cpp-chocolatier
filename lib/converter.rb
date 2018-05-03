@@ -400,7 +400,7 @@ class Converter
             add_c_defs_used_by_decl(super_class_decl)
           end
         end
-    when "ElaboratedType"
+      when "ElaboratedType"
         add_c_defs_used_by_type(type[:named_type])
       when "FunctionProto"
         type[:params].each do |param|
