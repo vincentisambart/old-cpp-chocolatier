@@ -308,45 +308,49 @@ class Converter
     type_handled?(decl[:return_type]) && decl[:params].all? {|param| type_handled?(param[:type]) }
   end
 
-  class CDefinitionsSet
-    attr_reader :types, :structs, :enums
+  class ObjCDefinitionsSet
+    KINDS = %i{types structs enums unions protocols categories}
 
     def initialize(converter)
       @converter = converter
-      @types = Set.new
-      @structs = Set.new
-      @enums = Set.new
-      @unions = Set.new
+      @kinds = {}
+      KINDS.each do |kind|
+        @kinds[kind] = Set.new
+      end
     end
 
     def to_h
       h = {}
-      h[:types] = @types unless @types.empty?
-      h[:structs] = @structs unless @structs.empty?
-      h[:enums] = @enums unless @enums.empty?
-      h[:unions] = @unions unless @unions.empty?
+      KINDS.each do |kind|
+        h[kind] = @kinds[kind] unless @kinds[kind].empty?
+      end
       h
     end
 
     def include?(usr)
-      @types.include?(usr) ||
-        @structs.include?(usr) ||
-        @enums.include?(usr) ||
-        @unions.include?(usr)
+      @kinds.any? {|kind, set| set.include?(usr) }
     end
 
     def add_c_defs_used_by_decl(decl)
+      usr = decl[:usr]
+      return if include?(usr)
       case decl[:kind]
       when "ObjCInterface", "ObjCProtocol", "ObjCCategory"
-        return if @types.include?(decl[:usr])
-        @types << decl[:usr]
+        case decl[:kind]
+        when "ObjCInterface"
+          @kinds[:types] << usr
+        when "ObjCProtocol"
+          @kinds[:protocols] << usr
+        when "ObjCCategory"
+          @kinds[:categories] << usr
+        end
         if decl[:children]
           decl[:children].each do |child|
             add_c_defs_used_by_decl(child) if child[:kind] == "ObjCMethod"
           end
         end
       when "Typedef"
-        @types << decl[:usr]
+        @kinds[:types] << usr
         add_c_defs_used_by_type(decl[:type])
       when "ObjCMethod"
         add_c_defs_used_by_type(decl[:return_type])
@@ -356,11 +360,9 @@ class Converter
       when "Record"
         case decl[:tag_kind]
         when "struct"
-          return if @structs.include?(decl[:usr])
-          @structs << decl[:usr]
+          @kinds[:structs] << usr
         when "union"
-          return if @unions.include?(decl[:usr])
-          @unions << decl[:usr]
+          @kinds[:unions] << usr
         else
           raise "Unknown tag kind #{decl[:tag_kind]} in decl #{decl.inspect}"
         end
@@ -370,10 +372,10 @@ class Converter
       when "Field"
         add_c_defs_used_by_type(decl[:type])
       when "Enum"
-        @enums << decl[:usr]
+        @kinds[:enums] << usr
         add_c_defs_used_by_type(decl[:integer_type])
       when "ObjCInterface"
-        @types << decl[:usr]
+        @kinds[:types] << usr
       else
         raise "Unknown decl #{decl.inspect}"
       end
@@ -461,7 +463,7 @@ class Converter
     end
 
     # Make a list of the definitions used by Objective-C objects
-    definitions_used = CDefinitionsSet.new(self)
+    definitions_used = ObjCDefinitionsSet.new(self)
     @json[:children].each do |decl|
       next if decl[:is_forward_declaration]
       next unless %w{ObjCInterface ObjCProtocol ObjCCategory}.include?(decl[:kind])
@@ -473,7 +475,7 @@ class Converter
     @categories_per_module = {}
     @json[:children].each do |decl|
       next if decl[:is_forward_declaration]
-      next unless %w{ObjCInterface ObjCProtocol ObjCCategory}.include?(decl[:kind]) || definitions_used.include?(decl[:usr])
+      next unless definitions_used.include?(decl[:usr])
 
       mod = determine_module(decl)
 
