@@ -586,7 +586,7 @@ class Converter
         fn ptr(&self) -> ObjCObjectPointer {
             self.0
         }
-        fn from_ptr_unchecked(ptr: ObjCObjectPointer) -> NSObject {
+        fn from_ptr_unchecked(ptr: ObjCObjectPointer) -> Self {
             #{name}(ptr)
         }
     }
