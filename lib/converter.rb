@@ -346,6 +346,7 @@ class Converter
           end
         end
       when "Typedef"
+        @types << decl[:usr]
         add_c_defs_used_by_type(decl[:type])
       when "ObjCMethod"
         add_c_defs_used_by_type(decl[:return_type])
