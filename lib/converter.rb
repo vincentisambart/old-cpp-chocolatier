@@ -422,6 +422,15 @@ class Converter
     end
   end
 
+  def protocol_trait_name(protocol, when_in:)
+    mod = @protocol_module[protocol]
+    if mod == when_in
+      "#{protocol}Protocol"
+    else
+      "#{mod}::#{protocol}Protocol"
+    end
+  end
+
   def convert
     raise "Expecting a TranslationUnit declaration" unless @json[:kind] == "TranslationUnit"
     puts "extern crate objc;"
@@ -564,7 +573,7 @@ class Converter
             super_class_decl = find_decl(decl[:super_class_usr])
             base_traits << "#{super_class_decl[:name]}Interface"
           end
-          base_traits.concat(followed_protocols.map {|protocol_name| "#{protocol_name}Protocol" })
+          base_traits.concat(followed_protocols.map {|protocol| protocol_trait_name(protocol, when_in: mod) })
 
           puts "    pub trait #{name}Interface: #{base_traits.join(", ")} {"
           methods.each do |method_decl|
@@ -595,7 +604,7 @@ class Converter
           puts "    }"
 
           base_traits = ["Raw#{decl[:name]}Protocol"]
-          base_traits.concat(followed_protocols.map {|name| "#{name}Protocol" })
+          base_traits.concat(followed_protocols.map {|protocol| protocol_trait_name(protocol, when_in: mod) })
           puts "    trait #{decl[:name]}Protocol: #{base_traits.join(", ")} {"
           methods.each do |method_decl|
             puts "        #{rustify_method(method_decl)}"
@@ -629,7 +638,7 @@ class Converter
             "#{class_mod}::#{class_name}Interface",
             "Raw#{class_name}Category",
           ]
-          base_traits.concat(followed_protocols.map {|protocol_name| "#{protocol_name}Protocol" })
+          base_traits.concat(followed_protocols.map {|protocol| protocol_trait_name(protocol, when_in: mod) })
           puts "    trait #{class_name}Category: #{base_traits.join(", ")} {"
           methods.each do |method_decl|
             puts "        #{rustify_method(method_decl)}"
