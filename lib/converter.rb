@@ -551,28 +551,20 @@ class Converter
             category[:children].select {|child| child[:kind] == "ObjCMethod" }
           end.flatten)
 
-          raw_base_traits = []
-          base_traits = []
-
-          if decl[:super_class_usr]
-            super_class_decl = find_decl(decl[:super_class_usr])
-            raw_base_traits << "Raw#{super_class_decl[:name]}Interface"
-            base_traits << "#{super_class_decl[:name]}Interface"
-          end
-          raw_base_traits.concat(followed_protocols.map {|protocol_name| "Raw#{protocol_name}Protocol" })
-          base_traits.concat(followed_protocols.map {|protocol_name| "#{protocol_name}Protocol" })
-          if base_traits.empty?
-            base_traits << "ObjCObject"
-            raw_base_traits << "ObjCObject"
-          end
-
           puts "    pub struct #{name}(ObjCObjectPointer);"
 
-          puts "    pub trait Raw#{name}Interface: #{raw_base_traits.join(", ")} {"
+          puts "    pub trait Raw#{name}Interface: ObjCObject {"
           methods.each do |method_decl|
             puts rustify_raw_method(method_decl)
           end
           puts "    }"
+
+          base_traits = ["Raw#{name}Interface"]
+          if decl[:super_class_usr]
+            super_class_decl = find_decl(decl[:super_class_usr])
+            base_traits << "#{super_class_decl[:name]}Interface"
+          end
+          base_traits.concat(followed_protocols.map {|protocol_name| "#{protocol_name}Protocol" })
 
           puts "    pub trait #{name}Interface: #{base_traits.join(", ")} {"
           methods.each do |method_decl|
@@ -595,16 +587,15 @@ class Converter
         when "ObjCProtocol"
           methods = decl[:children].select {|child| child[:kind] == "ObjCMethod" }
           followed_protocols = decl[:protocols] || []
-          raw_base_traits = followed_protocols.map {|name| "Raw#{name}Protocol" }
-          raw_base_traits << "ObjCObject" if raw_base_traits.empty?
-          puts "    trait Raw#{decl[:name]}Protocol: #{raw_base_traits.join(", ")} {"
+
+          puts "    trait Raw#{decl[:name]}Protocol: ObjCObject {"
           methods.each do |method_decl|
             puts rustify_raw_method(method_decl)
           end
           puts "    }"
 
-          base_traits = followed_protocols.map {|name| "#{name}Protocol" }
-          base_traits << "ObjCObject" if base_traits.empty?
+          base_traits = ["Raw#{decl[:name]}Protocol"]
+          base_traits.concat(followed_protocols.map {|name| "#{name}Protocol" })
           puts "    trait #{decl[:name]}Protocol: #{base_traits.join(", ")} {"
           methods.each do |method_decl|
             puts "        #{rustify_method(method_decl)}"
@@ -628,17 +619,16 @@ class Converter
             category_decl[:protocols] || []
           end.flatten.uniq
 
-          decl[:children].select {|child| child[:kind] == "ObjCMethod" }
-
-          raw_base_traits = ["#{class_mod}::Raw#{class_name}Interface"]
-          raw_base_traits.concat(followed_protocols.map {|protocol_name| "Raw#{protocol_name}Protocol" })
-          puts "    trait Raw#{class_name}Category: #{raw_base_traits.join(", ")} {"
+          puts "    trait Raw#{class_name}Category: ObjCObject {"
           methods.each do |method_decl|
             puts rustify_raw_method(method_decl)
           end
           puts "    }"
 
-          base_traits = ["#{class_mod}::#{class_name}Interface"]
+          base_traits = [
+            "#{class_mod}::#{class_name}Interface",
+            "Raw#{class_name}Category",
+          ]
           base_traits.concat(followed_protocols.map {|protocol_name| "#{protocol_name}Protocol" })
           puts "    trait #{class_name}Category: #{base_traits.join(", ")} {"
           methods.each do |method_decl|
