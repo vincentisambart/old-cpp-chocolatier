@@ -308,120 +308,100 @@ class Converter
     type_handled?(decl[:return_type]) && decl[:params].all? {|param| type_handled?(param[:type]) }
   end
 
-  class ObjCDefinitionsSet
-    KINDS = %i{types structs enums unions protocols categories}
+  def definition_used?(usr)
+    @definition_kinds.any? {|kind, set| set.include?(usr) }
+  end
 
-    def initialize(converter)
-      @converter = converter
-      @kinds = {}
-      KINDS.each do |kind|
-        @kinds[kind] = Set.new
-      end
-    end
-
-    def to_h
-      h = {}
-      KINDS.each do |kind|
-        h[kind] = @kinds[kind] unless @kinds[kind].empty?
-      end
-      h
-    end
-
-    def include?(usr)
-      @kinds.any? {|kind, set| set.include?(usr) }
-    end
-
-    def add_c_defs_used_by_decl(decl)
-      usr = decl[:usr]
-      return if include?(usr)
+  def add_objc_defs_used_by_decl(decl)
+    usr = decl[:usr]
+    return if definition_used?(usr)
+    case decl[:kind]
+    when "ObjCInterface", "ObjCProtocol", "ObjCCategory"
       case decl[:kind]
-      when "ObjCInterface", "ObjCProtocol", "ObjCCategory"
-        case decl[:kind]
-        when "ObjCInterface"
-          @kinds[:types] << usr
-        when "ObjCProtocol"
-          @kinds[:protocols] << usr
-        when "ObjCCategory"
-          @kinds[:categories] << usr
-        end
-        if decl[:children]
-          decl[:children].each do |child|
-            add_c_defs_used_by_decl(child) if child[:kind] == "ObjCMethod"
-          end
-        end
-      when "Typedef"
-        @kinds[:types] << usr
-        add_c_defs_used_by_type(decl[:type])
-      when "ObjCMethod"
-        add_c_defs_used_by_type(decl[:return_type])
-        decl[:params].each do |param|
-          add_c_defs_used_by_type(param[:type])
-        end
-      when "Record"
-        case decl[:tag_kind]
-        when "struct"
-          @kinds[:structs] << usr
-        when "union"
-          @kinds[:unions] << usr
-        else
-          raise "Unknown tag kind #{decl[:tag_kind]} in decl #{decl.inspect}"
-        end
-        decl[:fields].each do |field|
-          add_c_defs_used_by_type(field[:type])
-        end
-      when "Field"
-        add_c_defs_used_by_type(decl[:type])
-      when "Enum"
-        @kinds[:enums] << usr
-        add_c_defs_used_by_type(decl[:integer_type])
       when "ObjCInterface"
-        @kinds[:types] << usr
-      else
-        raise "Unknown decl #{decl.inspect}"
+        @definition_kinds[:types] << usr
+      when "ObjCProtocol"
+        @definition_kinds[:protocols] << usr
+      when "ObjCCategory"
+        @definition_kinds[:categories] << usr
       end
+      if decl[:children]
+        decl[:children].each do |child|
+          add_objc_defs_used_by_decl(child) if child[:kind] == "ObjCMethod"
+        end
+      end
+    when "Typedef"
+      @definition_kinds[:types] << usr
+      add_objc_defs_used_by_type(decl[:type])
+    when "ObjCMethod"
+      add_objc_defs_used_by_type(decl[:return_type])
+      decl[:params].each do |param|
+        add_objc_defs_used_by_type(param[:type])
+      end
+    when "Record"
+      case decl[:tag_kind]
+      when "struct"
+        @definition_kinds[:structs] << usr
+      when "union"
+        @definition_kinds[:unions] << usr
+      else
+        raise "Unknown tag kind #{decl[:tag_kind]} in decl #{decl.inspect}"
+      end
+      decl[:fields].each do |field|
+        add_objc_defs_used_by_type(field[:type])
+      end
+    when "Field"
+      add_objc_defs_used_by_type(decl[:type])
+    when "Enum"
+      @definition_kinds[:enums] << usr
+      add_objc_defs_used_by_type(decl[:integer_type])
+    when "ObjCInterface"
+      @definition_kinds[:types] << usr
+    else
+      raise "Unknown decl #{decl.inspect}"
     end
+  end
 
-    def add_c_defs_used_by_type(type)
-      case type[:type_class]
-      when "Builtin", "ObjCTypeParam"
-        nil
-      when "Typedef", "Record", "Enum"
-        decl = @converter.find_decl(type[:decl_usr])
-        add_c_defs_used_by_decl(decl)
-      when "Attributed"
-        add_c_defs_used_by_type(type[:modified_type])
-      when "Pointer", "Decayed", "ObjCObjectPointer", "BlockPointer"
-        add_c_defs_used_by_type(type[:pointee])
-      when "ObjCInterface", "ObjCObject"
-        if type[:base_type]
-          add_c_defs_used_by_type(type[:base_type])
-        else
-          decl = @converter.find_decl(type[:interface_usr])
-          add_c_defs_used_by_decl(decl)
-          if decl[:super_class_usr]
-            super_class_decl = @converter.find_decl(decl[:super_class_usr])
-            add_c_defs_used_by_decl(super_class_decl)
-          end
-        end
-      when "ElaboratedType"
-        add_c_defs_used_by_type(type[:named_type])
-      when "FunctionProto"
-        type[:params].each do |param|
-          add_c_defs_used_by_type(param[:type])
-        end
-        add_c_defs_used_by_type(type[:return_type])
-      when "FunctionNoProto"
-        add_c_defs_used_by_type(type[:return_type])
-      when "Paren"
-        add_c_defs_used_by_type(type[:inner_type])
-      when "ConstantArray"
-        add_c_defs_used_by_type(type[:element_type])
-      when "ExtVector"
-        # vector types are use by for example AVCameraCalibrationData (matrix_float)
-        # For the time being not supported
+  def add_objc_defs_used_by_type(type)
+    case type[:type_class]
+    when "Builtin", "ObjCTypeParam"
+      nil
+    when "Typedef", "Record", "Enum"
+      decl = find_decl(type[:decl_usr])
+      add_objc_defs_used_by_decl(decl)
+    when "Attributed"
+      add_objc_defs_used_by_type(type[:modified_type])
+    when "Pointer", "Decayed", "ObjCObjectPointer", "BlockPointer"
+      add_objc_defs_used_by_type(type[:pointee])
+    when "ObjCInterface", "ObjCObject"
+      if type[:base_type]
+        add_objc_defs_used_by_type(type[:base_type])
       else
-        raise "Unknown type #{type.inspect}"
+        decl = find_decl(type[:interface_usr])
+        add_objc_defs_used_by_decl(decl)
+        if decl[:super_class_usr]
+          super_class_decl = find_decl(decl[:super_class_usr])
+          add_objc_defs_used_by_decl(super_class_decl)
+        end
       end
+    when "ElaboratedType"
+      add_objc_defs_used_by_type(type[:named_type])
+    when "FunctionProto"
+      type[:params].each do |param|
+        add_objc_defs_used_by_type(param[:type])
+      end
+      add_objc_defs_used_by_type(type[:return_type])
+    when "FunctionNoProto"
+      add_objc_defs_used_by_type(type[:return_type])
+    when "Paren"
+      add_objc_defs_used_by_type(type[:inner_type])
+    when "ConstantArray"
+      add_objc_defs_used_by_type(type[:element_type])
+    when "ExtVector"
+      # vector types are use by for example AVCameraCalibrationData (matrix_float)
+      # For the time being not supported
+    else
+      raise "Unknown type #{type.inspect}"
     end
   end
 
@@ -463,11 +443,14 @@ class Converter
     end
 
     # Make a list of the definitions used by Objective-C objects
-    definitions_used = ObjCDefinitionsSet.new(self)
+    @definition_kinds = {}
+    %i{types structs enums unions protocols categories}.each do |kind|
+      @definition_kinds[kind] = Set.new
+    end
     @json[:children].each do |decl|
       next if decl[:is_forward_declaration]
       next unless %w{ObjCInterface ObjCProtocol ObjCCategory}.include?(decl[:kind])
-      definitions_used.add_c_defs_used_by_decl(decl)
+      add_objc_defs_used_by_decl(decl)
     end
 
     @declarations_per_module = {}
@@ -475,7 +458,7 @@ class Converter
     @categories_per_module = {}
     @json[:children].each do |decl|
       next if decl[:is_forward_declaration]
-      next unless definitions_used.include?(decl[:usr])
+      next unless definition_used?(decl[:usr])
 
       mod = determine_module(decl)
 
