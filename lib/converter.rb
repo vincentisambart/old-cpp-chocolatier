@@ -584,12 +584,14 @@ class Converter
           end
           puts "    }"
 
+          # from_ptr_unchecked doesn't check if the class is correct, but it does check that the pointer is not null.
           puts <<-END
     impl ObjCObject for #{name} {
         fn ptr(&self) -> ObjCObjectPointer {
             self.0
         }
         fn from_ptr_unchecked(ptr: ObjCObjectPointer) -> Self {
+            assert!(!ptr.is_null());
             #{name}(ptr)
         }
     }
