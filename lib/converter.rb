@@ -151,6 +151,8 @@ class Converter
       else
         $1
       end
+    when %r{/usr/include/(mach|sys)/.+\.h\z}, %r{/lib/clang/[^/]+/include/[^./]+\.h\z}, %r{/usr/include/MacTypes\.h\z}
+      "core"
     else
       raise "Couldn't determine the module for #{file_path}"
     end
