@@ -463,7 +463,9 @@ auto serialize_decl(clang::Decl const *decl) -> nlohmann::json {
   case clang::Decl::Record: {
     auto record_decl = static_cast<const clang::RecordDecl *>(decl);
     serialized_decl["name"] = record_decl->getName();
-    {
+    auto is_forward_declaration = !record_decl->isCompleteDefinition();
+    serialized_decl["is_forward_declaration"] = is_forward_declaration;
+    if (!is_forward_declaration) {
       auto fields = nlohmann::json::array();
       for (auto const field_decl : record_decl->fields()) {
         // All enumerators should be instances of EnumConstantDecl
@@ -482,7 +484,9 @@ auto serialize_decl(clang::Decl const *decl) -> nlohmann::json {
     if (!integer_type.isNull()) {
       serialized_decl["integer_type"] = serialize_type(integer_type, context);
     }
-    {
+    auto is_forward_declaration = !enum_decl->isCompleteDefinition();
+    serialized_decl["is_forward_declaration"] = is_forward_declaration;
+    if (!is_forward_declaration) {
       auto enumerators = nlohmann::json::array();
       for (auto const enumerator_decl : enum_decl->enumerators()) {
         // All enumerators should be instances of EnumConstantDecl

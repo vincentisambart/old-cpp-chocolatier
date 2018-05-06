@@ -4,3 +4,4 @@
 - remove old method that have been deprecated for a long time
 - maybe also use the selectors in core from the other modules
 - for structs add asserts to make sure layout and alignment are as in C like bindgen does
+- make sure we handle a struct/union declared in an other struct/union

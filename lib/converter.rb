@@ -5,11 +5,10 @@ class Converter
   def initialize(json)
     @json = json
     @declarations = {}
-    @forward_declarations = {}
   end
 
   def find_decl(usr)
-    decl = @declarations[usr] || @forward_declarations[usr]
+    decl = @declarations[usr]
     return decl if decl
     raise "Could not find declaration #{usr}"
   end
@@ -285,6 +284,17 @@ class Converter
     code
   end
 
+  def rustify_record(name, decl)
+return if !decl[:fields] || name == "" # TODO
+    raise "Tag kind #{decl[:tag_kind]} not yet supported in #{decl.inspect}" unless decl[:tag_kind] == "struct"
+    puts "    #[repr(C)]"
+    puts "    struct #{name} {"
+    decl[:fields].each do |field|
+      puts "        #{field[:name]}: #{rustify_raw_type(field[:type])},"
+    end
+    puts "    }"
+  end
+
   def type_handled?(type)
     case type[:type_class]
     when "Builtin"
@@ -349,8 +359,10 @@ class Converter
       else
         raise "Unknown tag kind #{decl[:tag_kind]} in decl #{decl.inspect}"
       end
-      decl[:fields].each do |field|
-        add_objc_defs_used_by_type(field[:type])
+      if decl[:fields]
+        decl[:fields].each do |field|
+          add_objc_defs_used_by_type(field[:type])
+        end
       end
     when "Field"
       add_objc_defs_used_by_type(decl[:type])
@@ -423,11 +435,18 @@ class Converter
 
     # A full declaration might come after its first use so make the list of all declarations first.
     @json[:children].each do |decl|
-      if decl[:is_forward_declaration]
-        @forward_declarations[decl[:usr]] = decl
-      else
-        @declarations[decl[:usr]] = decl
+      usr = decl[:usr]
+      known_decl = @declarations[usr]
+      if known_decl
+        next if decl[:is_forward_declaration]
+        next if decl[:kind] == "Function" && decl[:is_implicit]
+        next if decl[:kind] == "Typedef" && decl[:type] == known_decl[:type]
+
+next if decl[:kind] == "Function" || decl[:kind] == "Var" # TODO
+        raise "Multiple definitions of #{decl[:usr]}: #{decl.inspect} and #{@declarations[decl[:usr]].inspect}" unless known_decl[:is_forward_declaration]
       end
+
+      @declarations[usr] = decl
     end
 
     @class_module = {}
@@ -458,6 +477,7 @@ class Converter
     @declarations_per_module = {}
     @selectors_per_module = {}
     @categories_per_module = {}
+    @elaborated_types_named_by_typedefs = {}
     @json[:children].each do |decl|
       next if decl[:is_forward_declaration]
       next unless definition_used?(decl[:usr])
@@ -466,7 +486,8 @@ class Converter
 
       @declarations_per_module[mod] ||= []
       @declarations_per_module[mod] << decl
-      if %w{ObjCInterface ObjCProtocol ObjCCategory}.include?(decl[:kind])
+      case decl[:kind]
+      when "ObjCInterface", "ObjCProtocol", "ObjCCategory"
         methods = decl[:children].select {|child| child[:kind] == "ObjCMethod" && method_handled?(child) }
 
         @selectors_per_module[mod] ||= Set.new
@@ -476,6 +497,14 @@ class Converter
           @categories_per_module[mod] ||= {}
           @categories_per_module[mod][decl[:class_name]] ||= []
           @categories_per_module[mod][decl[:class_name]] << decl
+        end
+      when "Typedef"
+        if %w{Record Enum}.include?(decl[:type][:type_class])
+          elaborated_type_usr = decl[:type][:decl_usr]
+          elaborated_type = find_decl(elaborated_type_usr)
+          if decl[:name].gsub("_", "").downcase == elaborated_type[:name].gsub("_", "").downcase
+            @elaborated_types_named_by_typedefs[elaborated_type_usr] = decl[:usr]
+          end
         end
       end
     end
@@ -636,8 +665,29 @@ class Converter
           puts "    }"
           puts "    impl #{class_name}Category for #{class_mod}::#{class_name} {}"
 
-        else
+        when "Record"
+          next if @elaborated_types_named_by_typedefs[decl[:usr]]
+          rustify_record(decl[:name], decl)
+
+        when "Enum"
+          next if @elaborated_types_named_by_typedefs[decl[:usr]]
           # TODO
+
+        when "Typedef"
+          case decl[:type][:type_class]
+          when "Record"
+            record_usr = decl[:type][:decl_usr]
+            if @elaborated_types_named_by_typedefs[record_usr] == decl[:usr]
+              rustify_record(decl[:name], find_decl(record_usr))
+            else
+              # TODO
+            end
+          else
+            # TODO
+          end
+
+        else
+          raise "Unknown decl #{decl.inspect}"
         end
       end
 
