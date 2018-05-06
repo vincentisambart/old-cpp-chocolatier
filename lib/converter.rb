@@ -285,12 +285,17 @@ class Converter
   end
 
   def rustify_record(name, decl)
-return if !decl[:fields] || name == "" # TODO
+    return if name == "" # TODO
     raise "Tag kind #{decl[:tag_kind]} not yet supported in #{decl.inspect}" unless decl[:tag_kind] == "struct"
     puts "    #[repr(C)]"
     puts "    struct #{name} {"
-    decl[:fields].each do |field|
-      puts "        #{field[:name]}: #{rustify_raw_type(field[:type])},"
+    if decl[:fields]
+      decl[:fields].each do |field|
+        puts "        #{field[:name]}: #{rustify_raw_type(field[:type])},"
+      end
+    else
+      # While waiting for https://github.com/rust-lang/rust/issues/43467, do what bindgen does.
+      puts "        _unused: [u8; 0],"
     end
     puts "    }"
   end
