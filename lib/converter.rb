@@ -145,7 +145,7 @@ class Converter
     when %r{/System/Library/Frameworks/([^./]+)\.framework/Frameworks/[^/.]+.framework/Headers/[^/.]+\.h\z}
       $1
     when %r{/usr/include/([^/]+)/[^/.]+\.h\z}
-      if $1 == "objc"
+      if $1 == "objc" || $1.start_with?("_")
         "core"
       else
         $1
