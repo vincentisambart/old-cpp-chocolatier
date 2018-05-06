@@ -216,9 +216,17 @@ class Converter
       "ObjCObjectPointer"
     when "Attributed"
       rustify_raw_type(type[:modified_type])
+    when "ElaboratedType"
+      rustify_raw_type(type[:named_type])
+    when "Record"
+      decl_usr = type[:decl_usr]
+      record_name(find_decl(decl_usr))
     when "Pointer", "Decayed"
       "*#{rustify_raw_type(type[:pointee])}"
+    when "Paren"
+      rustify_raw_type(type[:inner_type])
     else
+      # raise "Unknown type #{type.inspect}"
       p type
       "todo"
     end
@@ -284,7 +292,8 @@ class Converter
     code
   end
 
-  def rustify_record(name, decl)
+  def rustify_record(decl)
+    name = record_name(decl)
     return if name == "" # TODO
     raise "Tag kind #{decl[:tag_kind]} not yet supported in #{decl.inspect}" unless decl[:tag_kind] == "struct"
     puts "    #[repr(C)]"
@@ -430,6 +439,16 @@ class Converter
       "#{protocol}Protocol"
     else
       "#{mod}::#{protocol}Protocol"
+    end
+  end
+
+  def record_name(decl)
+    record_usr = decl[:usr]
+    if typedef_usr = @elaborated_types_named_by_typedefs[record_usr]
+      typedef_decl = find_decl(typedef_usr)
+      typedef_decl[:name]
+    else
+      decl[:name]
     end
   end
 
@@ -672,7 +691,7 @@ next if decl[:kind] == "Function" || decl[:kind] == "Var" # TODO
 
         when "Record"
           next if @elaborated_types_named_by_typedefs[decl[:usr]]
-          rustify_record(decl[:name], decl)
+          rustify_record(decl)
 
         when "Enum"
           next if @elaborated_types_named_by_typedefs[decl[:usr]]
@@ -683,7 +702,7 @@ next if decl[:kind] == "Function" || decl[:kind] == "Var" # TODO
           when "Record"
             record_usr = decl[:type][:decl_usr]
             if @elaborated_types_named_by_typedefs[record_usr] == decl[:usr]
-              rustify_record(decl[:name], find_decl(record_usr))
+              rustify_record(find_decl(record_usr))
             else
               # TODO
             end
